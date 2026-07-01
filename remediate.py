@@ -113,6 +113,7 @@ def poll(state):
         num = int(key)
         if num in linked:  # a PR referencing this issue exists on GitHub -> fix landed
             task["pr_url"] = linked[num]
+            task["status"] = "fixed"
             comment(num, f"Devin opened a pull request: {linked[num]}")
             print(f"#{key} -> fix committed ({linked[num]})")
             continue
