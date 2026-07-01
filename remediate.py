@@ -23,7 +23,6 @@ GH_HEADERS = {"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN', '')}",
               "Accept": "application/vnd.github+json"}
 DEVIN_HEADERS = {"Authorization": f"Bearer {os.environ.get('DEVIN_API_KEY', '')}"}
 STATE_FILE = "state.json"
-DONE = {"finished", "blocked", "stopped", "expired"}
 
 PROMPT = """You are fixing one issue in the GitHub repo {repo}.
 
@@ -86,24 +85,45 @@ def dispatch(state):
         print(f"dispatched #{key} -> {s.get('session_id')}")
 
 
+def prs_by_issue():
+    """Map issue number -> PR url from 'Fixes #N' references in PR bodies.
+
+    GitHub is the source of truth for whether a fix actually landed - more reliable
+    than the agent's own structured output, which it does not always populate.
+    """
+    mapping, page = {}, 1
+    while True:
+        r = requests.get(f"{GITHUB}/repos/{REPO}/pulls", headers=GH_HEADERS,
+                         params={"state": "all", "per_page": 100, "page": page})
+        r.raise_for_status()
+        prs = r.json()
+        for pr in prs:
+            for n in re.findall(r"(?:fixes|closes|resolves)\s+#(\d+)", pr.get("body") or "", re.I):
+                mapping.setdefault(int(n), pr["html_url"])
+        if len(prs) < 100:
+            return mapping
+        page += 1
+
+
 def poll(state):
+    linked = prs_by_issue()
     for key, task in state.items():
-        if task["status"] != "running":
+        if task.get("pr_url"):
             continue
-        s = session_status(task["session_id"])
-        status = s.get("status_enum", "running")
-        if status not in DONE:
+        num = int(key)
+        if num in linked:  # a PR referencing this issue exists on GitHub -> fix landed
+            task["pr_url"] = linked[num]
+            comment(num, f"Devin opened a pull request: {linked[num]}")
+            print(f"#{key} -> fix committed ({linked[num]})")
             continue
-        out = s.get("structured_output") or {}
-        if isinstance(out, str):
+        # no PR yet - refresh the raw session status for visibility
+        sid = task.get("session_id")
+        if sid and not str(sid).startswith("sim"):
             try:
-                out = json.loads(out)
-            except json.JSONDecodeError:
-                out = {}
-        task["status"], task["pr_url"] = status, out.get("pr_url")
-        if task["pr_url"]:
-            comment(int(key), f"Devin opened a pull request: {task['pr_url']}")
-        print(f"#{key} -> {status} (pr={task['pr_url']})")
+                task["status"] = session_status(sid).get("status_enum", task["status"])
+            except Exception:
+                pass
+        print(f"#{key} -> {task['status']}")
 
 
 STATUS_LABELS = {
