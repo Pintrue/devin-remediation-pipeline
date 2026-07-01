@@ -1,0 +1,17 @@
+# Two services sharing the working dir so state.json / report.md are visible on the host.
+#   docker compose up                                    -> scan on a schedule + remediate loop
+#   docker compose run --rm scanner python scan_and_file.py  -> one-shot scan
+services:
+  scanner:
+    build: .
+    env_file: .env
+    command: python scan_and_file.py --interval 600
+    volumes:
+      - .:/app
+
+  remediate:
+    build: .
+    env_file: .env
+    command: python remediate.py
+    volumes:
+      - .:/app

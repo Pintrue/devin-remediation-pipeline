@@ -13,6 +13,8 @@ venv/
 *.log
 scan-output/
 state.db
+state.json
+report.md
 *.sqlite3
 .DS_Store
 .idea/
