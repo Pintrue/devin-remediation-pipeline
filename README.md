@@ -3,15 +3,7 @@
 A small event-driven system that finds code-quality / security issues in a repo
 and has [Devin](https://devin.ai) fix them, end to end:
 
-```
-  scan_and_file.py                 remediate.py
-  ----------------                 ------------
-  bandit scans the repo            reads the open labeled issues
-  files one issue per     ──────►  starts a Devin session per issue
-  bandit rule, listing             (fixes every listed occurrence in one PR)
-  all occurrences (label           polls each session to completion
-  "devin-remediate")               comments the PR back, writes report.md
-```
+![Architecture](docs/architecture.png)
 
 The scheduled scan is the trigger; GitHub issues are the event queue; Devin is
 the worker; `report.md` is the observability.
