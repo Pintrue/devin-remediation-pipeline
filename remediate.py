@@ -7,6 +7,7 @@ leader a one-glance view of what the system has done.
 import argparse
 import json
 import os
+import re
 import time
 
 import requests
@@ -79,8 +80,9 @@ def dispatch(state):
         if key in state:
             continue
         s = start_session(issue)
-        state[key] = {"title": issue["title"], "session_id": s.get("session_id"),
-                      "session_url": s.get("url"), "status": "running", "pr_url": None}
+        state[key] = {"title": issue["title"], "issue_url": issue["html_url"],
+                      "session_id": s.get("session_id"), "session_url": s.get("url"),
+                      "status": "running", "pr_url": None}
         print(f"dispatched #{key} -> {s.get('session_id')}")
 
 
@@ -104,22 +106,47 @@ def poll(state):
         print(f"#{key} -> {status} (pr={task['pr_url']})")
 
 
+STATUS_LABELS = {
+    "running": "in progress",
+    "blocked": "needs input",
+    "finished": "done (no PR)",
+    "stopped": "stopped",
+    "expired": "expired",
+}
+
+
+def display_status(task):
+    # a committed fix is the real outcome, regardless of the raw session state
+    if task.get("pr_url"):
+        return "fix committed"
+    return STATUS_LABELS.get(task.get("status", "running"), task.get("status", "running"))
+
+
+def scan_detail(title):
+    """Pull the bandit rule and occurrence count back out of the issue title."""
+    rule = re.match(r"\[([^\]]+)\]", title)
+    count = re.search(r"(\d+) occurrence", title)
+    return (rule.group(1) if rule else "-", count.group(1) if count else "1")
+
+
 def write_report(state):
     total = len(state)
-    finished = sum(1 for t in state.values() if t["status"] == "finished")
-    prs = sum(1 for t in state.values() if t.get("pr_url"))
-    rate = round(100 * finished / total) if total else 0
+    committed = sum(1 for t in state.values() if t.get("pr_url"))
+    rate = round(100 * committed / total) if total else 0
     lines = [
         "# Remediation report", "",
         f"- Issues picked up: **{total}**",
-        f"- Completed: **{finished}**",
-        f"- PRs opened: **{prs}**",
+        f"- Fixes committed: **{committed}**",
         f"- Success rate: **{rate}%**", "",
-        "| Issue | Status | Session | PR |", "|---|---|---|---|",
+        "| Issue | Rule | Occurrences | Status | Session | PR |",
+        "|---|---|---|---|---|---|",
     ]
     for key, t in sorted(state.items(), key=lambda kv: int(kv[0])):
+        rule, count = scan_detail(t["title"])
+        issue = f"[#{key}]({t['issue_url']})" if t.get("issue_url") else f"#{key}"
         pr = f"[PR]({t['pr_url']})" if t.get("pr_url") else "-"
-        lines.append(f"| #{key} {t['title'][:40]} | {t['status']} | [session]({t['session_url']}) | {pr} |")
+        lines.append(f"| {issue} | {rule} | {count} | {display_status(t)} | "
+                     f"[session]({t['session_url']}) | {pr} |")
     open("report.md", "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
 
