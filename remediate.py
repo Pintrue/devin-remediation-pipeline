@@ -99,32 +99,36 @@ def prs_by_issue():
         prs = r.json()
         for pr in prs:
             for n in re.findall(r"(?:fixes|closes|resolves)\s+#(\d+)", pr.get("body") or "", re.I):
-                mapping.setdefault(int(n), pr["html_url"])
+                mapping.setdefault(int(n), {"url": pr["html_url"],
+                                            "merged": pr.get("merged_at") is not None})
         if len(prs) < 100:
             return mapping
         page += 1
 
 
 def poll(state):
+    # re-check every pass so an open PR that later merges is picked up
     linked = prs_by_issue()
     for key, task in state.items():
-        if task.get("pr_url"):
-            continue
         num = int(key)
-        if num in linked:  # a PR referencing this issue exists on GitHub -> fix landed
-            task["pr_url"] = linked[num]
-            task["status"] = "fixed"
-            comment(num, f"Devin opened a pull request: {linked[num]}")
-            print(f"#{key} -> fix committed ({linked[num]})")
+        pr = linked.get(num)
+        if pr:
+            first_time = not task.get("pr_url")
+            task["pr_url"] = pr["url"]
+            # success only counts once the PR is MERGED; an open PR still awaits review
+            task["status"] = "merged" if pr["merged"] else "pr_open"
+            if first_time:
+                comment(num, f"Devin opened a pull request: {pr['url']}")
+            print(f"#{key} -> {task['status']} ({pr['url']})")
             continue
         # no PR yet - refresh the raw session status for visibility
         sid = task.get("session_id")
-        if sid and not str(sid).startswith("sim"):
+        if task.get("status") == "running" and sid and not str(sid).startswith("sim"):
             try:
                 task["status"] = session_status(sid).get("status_enum", task["status"])
             except Exception:
                 pass
-        print(f"#{key} -> {task['status']}")
+        print(f"#{key} -> {task.get('status')}")
 
 
 STATUS_LABELS = {
@@ -133,14 +137,14 @@ STATUS_LABELS = {
     "finished": "done (no PR)",
     "stopped": "stopped",
     "expired": "expired",
+    "pr_open": "PR open (awaiting merge)",
+    "merged": "merged (fixed)",
 }
 
 
 def display_status(task):
-    # a committed fix is the real outcome, regardless of the raw session state
-    if task.get("pr_url"):
-        return "fix committed"
-    return STATUS_LABELS.get(task.get("status", "running"), task.get("status", "running"))
+    s = task.get("status", "running")
+    return STATUS_LABELS.get(s, s)
 
 
 def scan_detail(title):
@@ -152,13 +156,15 @@ def scan_detail(title):
 
 def write_report(state):
     total = len(state)
-    committed = sum(1 for t in state.values() if t.get("pr_url"))
-    rate = round(100 * committed / total) if total else 0
+    merged = sum(1 for t in state.values() if t.get("status") == "merged")
+    awaiting = sum(1 for t in state.values() if t.get("status") == "pr_open")
+    rate = round(100 * merged / total) if total else 0
     lines = [
         "# Remediation report", "",
         f"- Issues picked up: **{total}**",
-        f"- Fixes committed: **{committed}**",
-        f"- Success rate: **{rate}%**", "",
+        f"- PRs awaiting merge: **{awaiting}**",
+        f"- Merged (fixed): **{merged}**",
+        f"- Success rate (merged): **{rate}%**", "",
         "| Issue | Rule | Occurrences | Status | Session | PR |",
         "|---|---|---|---|---|---|",
     ]
